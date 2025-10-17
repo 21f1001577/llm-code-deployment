@@ -1,0 +1,10 @@
+# Hugging Face Space configuration
+title: LLM Code Deployment
+emoji: ⚡
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+python_version: "3.13"
+license: mit
