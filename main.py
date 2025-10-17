@@ -9,13 +9,12 @@ from helpers import hash_secret
 from github_utils import create_and_push_repo
 from llm_utils import generate_files_from_brief
 
-
 # === CONFIG ===
 STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
 DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
 
-# Ensure DB writable (safe for Hugging Face)
+# Ensure DB is writable (HF-safe)
 try:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with open(os.path.join(os.path.dirname(DB_PATH) or ".", ".db_write_test"), "w") as f:
@@ -24,7 +23,7 @@ except (OSError, IOError):
     DB_PATH = "/tmp/tasks.db"
     os.makedirs("/tmp", exist_ok=True)
 
-# === APP ===
+# === APP INIT ===
 app = FastAPI(title="IITM LLM Code Deployment API")
 
 def init_db():
@@ -49,8 +48,7 @@ def init_db():
 
 init_db()
 
-
-# === SCHEMA ===
+# === MODEL ===
 class TaskRequest(BaseModel):
     email: str
     secret: str
@@ -59,9 +57,8 @@ class TaskRequest(BaseModel):
     nonce: str
     brief: str = ""
     checks: list = []
-    evaluation_url: str = None
+    evaluation_url: str | None = None
     attachments: list = []
-
 
 # === API ENDPOINT ===
 @app.post("/api-endpoint")
@@ -72,91 +69,76 @@ async def receive_task(req: TaskRequest, background_tasks: BackgroundTasks):
     if hash_secret(req.secret) != STORED_SECRET_HASH:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
+    # Store in DB
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO tasks (email, task, round, nonce, secret_hash, brief, evaluation_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (req.email, req.task, req.round, req.nonce, STORED_SECRET_HASH, req.brief, req.evaluation_url, "received"),
-    )
+    cur.execute("""
+        INSERT INTO tasks (email, task, round, nonce, secret_hash, brief, evaluation_url, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (req.email, req.task, req.round, req.nonce, STORED_SECRET_HASH, req.brief, req.evaluation_url, "received"))
     conn.commit()
     conn.close()
 
     background_tasks.add_task(process_task, req.dict())
     return {"status": "accepted", "task": req.task, "round": req.round, "nonce": req.nonce}
 
-
-# === MAIN PROCESSOR ===
+# === PROCESSOR ===
 def process_task(data: dict):
     task = data["task"]
     nonce = data["nonce"]
     round_number = data.get("round", 1)
     short = nonce.replace("-", "")[:8]
     repo_name = f"{task}-{short}"
+
     print(f"Processing {task} (Round {round_number})")
 
     try:
         # === ROUND 1 ===
         if round_number == 1:
-            print(f"[Round 1] Generating initial files")
+            print(f"[Round 1] Generating new files for {repo_name}")
             files = generate_files_from_brief(data["brief"], data.get("attachments", []))
             files["LICENSE"] = get_mit_license_text()
 
-            repo_url, commit_sha, pages_url = create_and_push_repo(
-                repo_name,
-                files,
-                evaluation_data={
-                    "email": data["email"],
-                    "task": task,
-                    "round": 1,
-                    "nonce": nonce,
-                    "evaluation_url": data.get("evaluation_url"),
-                },
-            )
-
         # === ROUND 2 ===
         elif round_number == 2:
-            print(f"[Round 2] Updating existing repo: {repo_name}")
-            updated_files = generate_files_from_brief(data["brief"], data.get("attachments", []))
-            updated_files["LICENSE"] = get_mit_license_text()
-
-            repo_url, commit_sha, pages_url = create_and_push_repo(
-                repo_name,
-                updated_files,
-                evaluation_data={
-                    "email": data["email"],
-                    "task": task,
-                    "round": 2,
-                    "nonce": nonce,
-                    "evaluation_url": data.get("evaluation_url"),
-                },
-                update_existing=True,
-            )
+            print(f"[Round 2] Updating files for {repo_name}")
+            files = generate_files_from_brief(data["brief"], data.get("attachments", []))
+            files["LICENSE"] = get_mit_license_text()
 
         else:
-            print(f"Unsupported round number: {round_number}")
+            print(f"❌ Unsupported round: {round_number}")
             return
+
+        repo_url, commit_sha, pages_url = create_and_push_repo(
+            repo_name,
+            files,
+            evaluation_data={
+                "email": data["email"],
+                "task": task,
+                "round": round_number,
+                "nonce": nonce,
+                "evaluation_url": data.get("evaluation_url"),
+            },
+        )
 
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE tasks SET status=? WHERE nonce=?",
-            (f"completed: {task} round {round_number}", nonce),
-        )
+        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"completed: {task} round {round_number}", nonce))
         conn.commit()
         conn.close()
 
-        print(f"✅ Task {task} (round {round_number}) completed successfully")
+        print(f"✅ Task {task} (round {round_number}) completed successfully.")
         print(f"🔗 Pages URL: {pages_url}")
 
     except Exception as e:
         print(f"❌ Process failed for {task} (round {round_number}): {e}")
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"failed: {str(e)}", nonce))
+        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"failed: {e}", nonce))
         conn.commit()
         conn.close()
 
-
+# === LICENSE ===
 def get_mit_license_text():
     return """MIT License
 
