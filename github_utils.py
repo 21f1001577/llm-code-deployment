@@ -17,11 +17,11 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
     try:
         user_login = user.login
         user_email = f"{user_login}@users.noreply.github.com"
-        subprocess.run(["git", "config", "--global", "user.name", user_login], check=False)
-        subprocess.run(["git", "config", "--global", "user.email", user_email], check=False)
-        print(f"Configured git identity: {user_login} <{user_email}>")
+        subprocess.run(["git", "config", "user.name", user_login], check=False)
+        subprocess.run(["git", "config", "user.email", user_email], check=False)
+        print(f"Configured local git identity: {user_login} <{user_email}>")
     except Exception as git_cfg_err:
-        print(f"Warning: Failed to configure git identity - {git_cfg_err}")
+        print(f"Warning: Failed to configure local git identity - {git_cfg_err}")
 
     repo = None
     try:
