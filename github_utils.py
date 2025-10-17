@@ -51,16 +51,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
+        with:
+          enablement: true
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: .
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 """
+
     files[".github/workflows/pages.yml"] = workflow
 
     # Push files
