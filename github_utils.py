@@ -16,11 +16,6 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
     user = gh.get_user()
     print(f"Authenticated as: {user.login}")
 
-    # Configure local Git identity
-    user_email = f"{user.login}@users.noreply.github.com"
-    subprocess.run(["git", "config", "--global", "user.name", user.login], check=False)
-    subprocess.run(["git", "config", "--global", "user.email", user_email], check=False)
-
     # Try to create or fetch the repo
     try:
         repo = user.create_repo(
@@ -35,9 +30,10 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
             print(f"♻️ Repo '{repo_name}' already exists — reusing it.")
             repo = user.get_repo(repo_name)
         else:
-            raise
+            print(f"❌ Unexpected repo creation error: {e.data}")
+            return None, None, None
 
-    # --- Add workflow ---
+    # --- Workflow file ---
     workflow_content = """name: Deploy Pages
 
 on:
@@ -72,38 +68,47 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 """
-
     files[".github/workflows/pages.yml"] = workflow_content
 
-    # --- Write and push all files ---
+    # --- Push logic ---
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
+            # Write files
             for name, content in files.items():
                 full_path = os.path.join(tmpdir, name)
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
                 with open(full_path, "w") as f:
                     f.write(content)
 
-            subprocess.check_call(["git", "init"], cwd=tmpdir)
-            subprocess.check_call(["git", "add", "."], cwd=tmpdir)
-            subprocess.check_call(["git", "commit", "-m", "Automated deployment"], cwd=tmpdir)
-            subprocess.check_call(["git", "branch", "-M", "main"], cwd=tmpdir)
+            # Configure Git per-repo
+            user_email = f"{user.login}@users.noreply.github.com"
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True)
+            subprocess.run(["git", "config", "user.name", user.login], cwd=tmpdir, check=True)
+            subprocess.run(["git", "config", "user.email", user_email], cwd=tmpdir, check=True)
 
+            # Commit & push
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+            subprocess.run(["git", "commit", "-m", "Automated deployment"], cwd=tmpdir, check=True)
+            subprocess.run(["git", "branch", "-M", "main"], cwd=tmpdir, check=True)
             push_url = f"https://{token}@github.com/{user.login}/{repo_name}.git"
-            subprocess.check_call(["git", "remote", "add", "origin", push_url], cwd=tmpdir)
-            subprocess.check_call(["git", "push", "-u", "origin", "main", "--force"], cwd=tmpdir)
+            subprocess.run(["git", "remote", "add", "origin", push_url], cwd=tmpdir, check=True)
+            subprocess.run(["git", "push", "-u", "origin", "main", "--force"], cwd=tmpdir, check=True)
 
-            commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmpdir).decode().strip()
+            commit_sha = (
+                subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmpdir)
+                .decode()
+                .strip()
+            )
     except subprocess.CalledProcessError as e:
-        print(f"Git failed: {e}")
+        print(f"❌ Git failed: {e}")
         return None, None, None
 
-    # --- Enable Pages via API ---
+    # --- Enable GitHub Pages ---
     pages_api = f"https://api.github.com/repos/{user.login}/{repo_name}/pages"
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
     payload = {"source": {"branch": "main", "path": "/"}}
 
-    time.sleep(5)  # wait for branch registration
+    time.sleep(5)
     r = requests.put(pages_api, headers=headers, json=payload)
     if r.status_code in (201, 204):
         print("✅ GitHub Pages enabled successfully.")
@@ -114,7 +119,7 @@ jobs:
 
     pages_url = f"https://{user.login}.github.io/{repo_name}/"
 
-    # --- Post back to evaluation_url ---
+    # --- Evaluation callback ---
     if evaluation_data and evaluation_data.get("evaluation_url"):
         payload = {
             "email": evaluation_data["email"],
@@ -126,8 +131,8 @@ jobs:
             "pages_url": pages_url,
         }
         try:
-            resp = requests.post(evaluation_data["evaluation_url"], json=payload, timeout=10)
-            print(f"📨 Evaluation POST → {resp.status_code}")
+            res = requests.post(evaluation_data["evaluation_url"], json=payload, timeout=10)
+            print(f"📨 Evaluation POST → {res.status_code}")
         except Exception as e:
             print(f"⚠️ Evaluation callback failed: {e}")
 
