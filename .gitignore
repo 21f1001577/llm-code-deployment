@@ -1,0 +1,96 @@
+# -----------------------
+# Python & Virtual Environments
+# -----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.pdb
+*.pkl
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+wheels/
+*.manifest
+*.spec
+.pytest_cache/
+.coverage
+htmlcov/
+.cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+.pyright/
+.ipynb_checkpoints/
+
+# -----------------------
+# Virtual Environment Folders
+# -----------------------
+.venv/
+venv/
+env/
+ENV/
+.uv/
+.uv_cache/
+
+# -----------------------
+# Project Files
+# -----------------------
+# Local environment variables
+.env
+.env.*
+!example.env  # (optional) keep a template if you have one
+
+# SQLite database (runtime DB only)
+tasks.db
+
+# Local testing files
+tests/
+*.log
+*.bak
+*.tmp
+*.swp
+*.swo
+*.orig
+.DS_Store
+
+# -----------------------
+# IDEs / Editors
+# -----------------------
+.vscode/
+.idea/
+*.iml
+
+# -----------------------
+# Jupyter / notebooks
+# -----------------------
+*.ipynb
+*.ipynb_checkpoints/
+
+# -----------------------
+# OS-specific junk
+# -----------------------
+Thumbs.db
+Desktop.ini
+*.lnk
+ehthumbs.db
+
+# -----------------------
+# Hugging Face build artifacts
+# -----------------------
+# Build logs / auto-generated metadata
+output.log
+space_logs.txt
+# Hugging Face temporary build files
+hf_cache/
+.huggingface/
+.hf_home/
+.hf_cache/
+test_request.json
+test_request_round1.json
+test_request_round2.json
