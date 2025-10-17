@@ -3,8 +3,7 @@ load_dotenv()
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
-import os
-import sqlite3
+import os, sqlite3, time, requests
 from helpers import hash_secret
 from github_utils import create_and_push_repo
 from llm_utils import generate_files_from_brief
@@ -14,7 +13,7 @@ STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
 DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
 
-# Ensure DB is writable (HF-safe)
+# Ensure DB writable (Hugging Face-safe)
 try:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with open(os.path.join(os.path.dirname(DB_PATH) or ".", ".db_write_test"), "w") as f:
@@ -23,7 +22,6 @@ except (OSError, IOError):
     DB_PATH = "/tmp/tasks.db"
     os.makedirs("/tmp", exist_ok=True)
 
-# === APP INIT ===
 app = FastAPI(title="IITM LLM Code Deployment API")
 
 def init_db():
@@ -45,10 +43,9 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
 init_db()
 
-# === MODEL ===
+
 class TaskRequest(BaseModel):
     email: str
     secret: str
@@ -57,32 +54,30 @@ class TaskRequest(BaseModel):
     nonce: str
     brief: str = ""
     checks: list = []
-    evaluation_url: str | None = None
+    evaluation_url: str = None
     attachments: list = []
 
-# === API ENDPOINT ===
+
 @app.post("/api-endpoint")
 async def receive_task(req: TaskRequest, background_tasks: BackgroundTasks):
     if not STORED_SECRET_HASH:
         raise HTTPException(status_code=500, detail="Server secret not configured")
-
     if hash_secret(req.secret) != STORED_SECRET_HASH:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
-    # Store in DB
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO tasks (email, task, round, nonce, secret_hash, brief, evaluation_url, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (req.email, req.task, req.round, req.nonce, STORED_SECRET_HASH, req.brief, req.evaluation_url, "received"))
+    cur.execute(
+        "INSERT INTO tasks (email, task, round, nonce, secret_hash, brief, evaluation_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (req.email, req.task, req.round, req.nonce, STORED_SECRET_HASH, req.brief, req.evaluation_url, "received"),
+    )
     conn.commit()
     conn.close()
 
     background_tasks.add_task(process_task, req.dict())
     return {"status": "accepted", "task": req.task, "round": req.round, "nonce": req.nonce}
 
-# === PROCESSOR ===
+
 def process_task(data: dict):
     task = data["task"]
     nonce = data["nonce"]
@@ -93,25 +88,17 @@ def process_task(data: dict):
     print(f"Processing {task} (Round {round_number})")
 
     try:
-        # === ROUND 1 ===
-        if round_number == 1:
-            print(f"[Round 1] Generating new files for {repo_name}")
-            files = generate_files_from_brief(data["brief"], data.get("attachments", []))
-            files["LICENSE"] = get_mit_license_text()
-
-        # === ROUND 2 ===
-        elif round_number == 2:
-            print(f"[Round 2] Updating files for {repo_name}")
-            files = generate_files_from_brief(data["brief"], data.get("attachments", []))
-            files["LICENSE"] = get_mit_license_text()
-
-        else:
-            print(f"❌ Unsupported round: {round_number}")
-            return
+        files = generate_files_from_brief(
+            brief=data["brief"],
+            attachments=data.get("attachments", []),
+            round_number=round_number,
+            user=OWNER_GITHUB,
+            repo_name=repo_name,
+        )
+        files["LICENSE"] = get_mit_license_text()
 
         repo_url, commit_sha, pages_url = create_and_push_repo(
-            repo_name,
-            files,
+            repo_name, files,
             evaluation_data={
                 "email": data["email"],
                 "task": task,
@@ -121,24 +108,57 @@ def process_task(data: dict):
             },
         )
 
+        post_to_evaluation_url(data, repo_url, commit_sha, pages_url)
+
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"completed: {task} round {round_number}", nonce))
+        cur.execute(
+            "UPDATE tasks SET status=? WHERE nonce=?",
+            (f"completed: {task} round {round_number}", nonce),
+        )
         conn.commit()
         conn.close()
-
-        print(f"✅ Task {task} (round {round_number}) completed successfully.")
+        print(f"✅ Task {task} (round {round_number}) completed successfully")
         print(f"🔗 Pages URL: {pages_url}")
 
     except Exception as e:
         print(f"❌ Process failed for {task} (round {round_number}): {e}")
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"failed: {e}", nonce))
+        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"failed: {str(e)}", nonce))
         conn.commit()
         conn.close()
 
-# === LICENSE ===
+
+def post_to_evaluation_url(data, repo_url, commit_sha, pages_url):
+    """POST to evaluation_url with exponential backoff (per IITM spec)."""
+    if not data.get("evaluation_url"):
+        print("⚠️ No evaluation_url provided, skipping callback.")
+        return
+
+    payload = {
+        "email": data["email"],
+        "task": data["task"],
+        "round": data["round"],
+        "nonce": data["nonce"],
+        "repo_url": repo_url,
+        "commit_sha": commit_sha,
+        "pages_url": pages_url,
+    }
+
+    for delay in [1, 2, 4, 8]:
+        try:
+            res = requests.post(data["evaluation_url"], json=payload, timeout=10)
+            print(f"📨 Evaluation POST → {res.status_code}")
+            if res.status_code == 200:
+                print("✅ Evaluation server acknowledged successfully.")
+                return
+        except Exception as e:
+            print(f"⚠️ Evaluation POST failed (retrying in {delay}s): {e}")
+        time.sleep(delay)
+    print("❌ Could not reach evaluation_url after multiple retries.")
+
+
 def get_mit_license_text():
     return """MIT License
 

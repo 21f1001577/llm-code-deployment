@@ -1,62 +1,67 @@
-import os
+import os, requests
 from openai import OpenAI
+
 
 def get_llm_client():
     base_url = os.getenv("OPENAI_BASE_URL", "https://aipipe.org/openai/v1")
     api_key = os.getenv("OPENAI_API_KEY") or os.getenv("AIPIPE_TOKEN")
-    if not api_key:
-        raise RuntimeError("AIPIPE_TOKEN or OPENAI_API_KEY not set")
     return OpenAI(base_url=base_url, api_key=api_key)
 
-def summarize_attachments(attachments):
-    if not attachments:
-        return "No attachments were provided."
-    desc = []
-    for a in attachments:
-        url = a.get("url", "")
-        name = a.get("name", "unknown")
-        if "image" in url:
-            desc.append(f"- Image: {name}")
-        elif "csv" in url:
-            desc.append(f"- CSV: {name}")
-        elif "markdown" in url:
-            desc.append(f"- Markdown: {name}")
-        elif "json" in url:
-            desc.append(f"- JSON: {name}")
-        else:
-            desc.append(f"- File: {name}")
-    return "\n".join(desc)
 
-def generate_files_from_brief(brief: str, attachments=None) -> dict:
+def summarize_attachments(attachments):
+    return "\n".join([f"- {a.get('name')}: {a.get('url')[:40]}..." for a in attachments]) if attachments else "No attachments."
+
+
+def get_existing_html(user, repo_name):
+    try:
+        r = requests.get(f"https://raw.githubusercontent.com/{user}/{repo_name}/main/index.html", timeout=10)
+        if r.status_code == 200:
+            return r.text
+    except Exception:
+        pass
+    return ""
+
+
+def generate_files_from_brief(brief: str, attachments=None, round_number=1, user=None, repo_name=None):
     attachments = attachments or []
     client = get_llm_client()
     attachment_summary = summarize_attachments(attachments)
 
-    system_prompt = f"""
-    You are an autonomous static web app generator.
-    Use HTML, JS, and CSS to implement the app described below.
-    Include all functionality inline — minimal, valid HTML5.
-    Attachment summary:
-    {attachment_summary}
-    """
+    system_prompt = (
+        "You are an autonomous web app generator for IITM’s LLM Code Deployment platform.\n"
+        "Generate minimal HTML5+JS+CSS web apps for given briefs. Attachments are provided as data URIs.\n"
+        "Use them directly inside <script> or <img> tags as needed. Do not print markdown or code fences.\n"
+    )
 
-    user_prompt = f"Task brief:\n{brief}\n\nGenerate index.html for this app."
+    existing_html = get_existing_html(user, repo_name) if round_number == 2 else ""
+    user_prompt = f"""
+Round {round_number} Brief:
+{brief}
+
+Existing HTML (if any):
+{existing_html[:2000]}
+
+Attachments:
+{attachment_summary}
+
+Return only HTML for index.html.
+"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt.strip()},
-            {"role": "user", "content": user_prompt.strip()},
-        ],
         temperature=0.25,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
     )
 
-    html_code = response.choices[0].message.content.strip()
-    if html_code.startswith("```"):
-        html_code = html_code.strip("`").replace("html", "").strip()
+    html = response.choices[0].message.content.strip()
+    if html.startswith("```"):
+        html = html.strip("`").replace("html", "").strip()
 
     return {
-        "index.html": html_code,
-        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nAttachments:\n{attachment_summary}",
+        "index.html": html,
+        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nRound: {round_number}\n\nAttachments:\n{attachment_summary}",
         "LICENSE": "MIT License\n\nCopyright (c) 2025",
     }
