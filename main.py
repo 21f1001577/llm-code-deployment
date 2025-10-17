@@ -111,7 +111,7 @@ def process_task(data: dict):
                     "email": data["email"], "task": task, "round": 1,
                     "nonce": nonce, "evaluation_url": data["evaluation_url"],
                 },
-                update_existing=False
+                
             )
 
         # === ROUND 2: update existing repo ===
@@ -126,7 +126,7 @@ def process_task(data: dict):
                     "email": data["email"], "task": task, "round": 2,
                     "nonce": nonce, "evaluation_url": data["evaluation_url"],
                 },
-                update_existing=True
+                
             )
 
         else:
