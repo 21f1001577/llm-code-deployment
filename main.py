@@ -22,7 +22,20 @@ STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
 
 # Simple SQLite logger (file: tasks.db)
-DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
+db_path = os.environ.get("DB_PATH", "./tasks.db")
+
+# If directory isn't writable (e.g., Hugging Face /app/), use /data
+try:
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    test_file = os.path.join(os.path.dirname(db_path) or ".", ".db_write_test")
+    with open(test_file, "w") as f:
+        f.write("")
+    os.remove(test_file)
+except (OSError, IOError):
+    db_path = "/data/tasks.db"
+    os.makedirs("/data", exist_ok=True)
+
+DB_PATH = db_path
 
 
 class TaskRequest(BaseModel):
