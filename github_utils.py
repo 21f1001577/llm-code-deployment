@@ -9,6 +9,8 @@ from github import Github, GithubException
 def create_and_push_repo(repo_name, files, evaluation_data=None):
     """Create or reuse a GitHub repo, push initial files, enable Pages via Actions, and notify evaluation URL."""
     token = os.getenv("GITHUB_TOKEN")
+    user = Github(token).get_user()
+    print(f"Authenticated as: {user.login}")
     if not token:
         raise RuntimeError("GITHUB_TOKEN not set")
 
