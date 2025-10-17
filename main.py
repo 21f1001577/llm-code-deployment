@@ -5,10 +5,6 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import os
 import sqlite3
-import requests
-from github import Github
-import subprocess
-import tempfile
 from helpers import hash_secret
 from github_utils import create_and_push_repo
 from llm_utils import generate_files_from_brief
@@ -19,7 +15,7 @@ STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
 DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
 
-# Ensure DB writable
+# Ensure DB writable (Hugging Face-safe)
 try:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with open(os.path.join(os.path.dirname(DB_PATH) or ".", ".db_write_test"), "w") as f:
@@ -106,12 +102,12 @@ def process_task(data: dict):
             files["LICENSE"] = get_mit_license_text()
 
             repo_url, commit_sha, pages_url = create_and_push_repo(
-                repo_name, files,
+                repo_name,
+                files,
                 evaluation_data={
                     "email": data["email"], "task": task, "round": 1,
-                    "nonce": nonce, "evaluation_url": data["evaluation_url"],
+                    "nonce": nonce, "evaluation_url": data.get("evaluation_url"),
                 },
-                
             )
 
         # === ROUND 2: update existing repo ===
@@ -120,13 +116,14 @@ def process_task(data: dict):
             updated_files = generate_files_from_brief(data["brief"], data.get("attachments", []))
             updated_files["LICENSE"] = get_mit_license_text()
 
+            # Push again (force overwrite)
             repo_url, commit_sha, pages_url = create_and_push_repo(
-                repo_name, updated_files,
+                repo_name,
+                updated_files,
                 evaluation_data={
                     "email": data["email"], "task": task, "round": 2,
-                    "nonce": nonce, "evaluation_url": data["evaluation_url"],
+                    "nonce": nonce, "evaluation_url": data.get("evaluation_url"),
                 },
-                
             )
 
         else:
@@ -143,6 +140,7 @@ def process_task(data: dict):
         conn.close()
 
         print(f"✅ Task {task} (round {round_number}) completed successfully")
+        print(f"🔗 Pages URL: {pages_url}")
 
     except Exception as e:
         print(f"❌ Process failed for {task} (round {round_number}): {e}")
