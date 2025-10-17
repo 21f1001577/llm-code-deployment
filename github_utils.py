@@ -27,7 +27,7 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
         )
         print(f"Repo created: {repo.html_url}")
     except GithubException as e:
-        # Handle "already exists"
+        # Handle already existing repos gracefully
         if e.status == 422 and "name already exists" in str(e.data).lower():
             print(f"Repo '{repo_name}' already exists. Reusing existing repository.")
             try:
@@ -38,6 +38,23 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
         else:
             print(f"Unexpected repo creation error: {e.data}")
             return None, None, None
+
+    # --- Pre-enable GitHub Pages environment before pushing workflow ---
+    try:
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+        payload = {"source": {"branch": "main", "path": "/"}}
+        pages_api = f"https://api.github.com/repos/{user.login}/{repo_name}/pages"
+        r = requests.post(pages_api, headers=headers, json=payload)
+        if r.status_code in (201, 204):
+            print("✅ Pre-enabled GitHub Pages environment via API.")
+        elif r.status_code == 409:
+            print("ℹ️ Pages environment already exists.")
+        elif r.status_code == 404:
+            print("⚠️ GitHub Pages API not available for this account type (expected for some user accounts).")
+        else:
+            print(f"⚠️ Pages pre-enable returned {r.status_code}: {r.text}")
+    except Exception as e:
+        print(f"⚠️ Skipping Pages pre-enable step due to error: {e}")
 
     # --- Add GitHub Actions workflow for Pages ---
     workflow_content = """name: Deploy Pages
@@ -80,7 +97,6 @@ jobs:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             print(f"Preparing repo in {tmp}")
-            # Write all files
             for name, content in files.items():
                 file_path = os.path.join(tmp, name)
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -90,20 +106,17 @@ jobs:
             # Initialize git
             subprocess.run(["git", "init"], cwd=tmp, check=True)
 
-            # Configure git identity locally (Hugging Face disallows global config)
+            # Configure local git identity (no --global)
             try:
                 user_login = user.login
                 user_email = f"{user_login}@users.noreply.github.com"
                 subprocess.run(["git", "config", "user.name", user_login], cwd=tmp, check=True)
                 subprocess.run(["git", "config", "user.email", user_email], cwd=tmp, check=True)
-                print(f"Configured local git identity: {user_login} <{user_email}>")
+                print(f"Configured git identity: {user_login} <{user_email}>")
             except Exception as git_cfg_err:
-                print(f"Warning: Failed to configure git identity - {git_cfg_err}")
+                print(f"Warning: Git identity setup failed - {git_cfg_err}")
 
-            # Ensure 'main' branch
             subprocess.run(["git", "branch", "-M", "main"], cwd=tmp, check=False)
-
-            # Commit and push
             subprocess.run(["git", "add", "."], cwd=tmp, check=True)
             subprocess.run(["git", "commit", "-m", "Initial commit by automation"], cwd=tmp, check=True)
 
@@ -114,32 +127,19 @@ jobs:
             commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp).decode().strip()
 
     except subprocess.CalledProcessError as e:
-        print(f"Git subprocess failed: {e}")
+        print(f"❌ Git subprocess failed: {e}")
         return None, None, None
     except Exception as e:
-        print(f"Unexpected push error: {e}")
+        print(f"❌ Unexpected push error: {e}")
         return None, None, None
 
-    # --- Enable GitHub Pages via API (if supported) ---
+    # --- Pages confirmation (best-effort) ---
     pages_url = f"https://{user.login}.github.io/{repo_name}/"
-    try:
-        pages_api = f"https://api.github.com/repos/{user.login}/{repo_name}/pages"
-        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-        payload = {"source": {"branch": "main", "path": "/"}}
+    print(f"📄 Expected Pages URL: {pages_url}")
 
-        r = requests.put(pages_api, headers=headers, json=payload)
-        if r.status_code == 404:
-            print("GitHub Pages API not available for user repos (expected for personal accounts).")
-        elif r.status_code in (201, 204):
-            print("GitHub Pages enabled successfully via API.")
-        else:
-            print(f"Unexpected Pages API response ({r.status_code}): {r.text}")
-    except Exception as e:
-        print(f"Skipping Pages API call due to error: {e}")
+    print("✅ Repo successfully pushed and workflow added.")
 
-    print("Repo successfully pushed and workflow added. Marking task as completed.")
-
-    # --- Send evaluation callback (non-blocking retries) ---
+    # --- Notify evaluation server ---
     if evaluation_data:
         payload = {
             "email": evaluation_data["email"],
@@ -153,7 +153,7 @@ jobs:
         for delay in [1, 2, 4, 8]:
             try:
                 res = requests.post(evaluation_data["evaluation_url"], json=payload, timeout=10)
-                print(f"Evaluation response: {res.status_code}")
+                print(f"Evaluation callback: {res.status_code}")
                 if res.status_code == 200:
                     break
             except Exception as e:
