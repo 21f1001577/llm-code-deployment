@@ -17,9 +17,8 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
     user = gh.get_user()
     print(f"Authenticated as: {user.login}")
 
-    repo = None
+    # 1️⃣ Create or reuse repo
     try:
-        # Try to create a new repo
         repo = user.create_repo(
             repo_name,
             description="Auto-generated repo for IITM LLM Deployment",
@@ -27,19 +26,14 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
         )
         print(f"Repo created: {repo.html_url}")
     except GithubException as e:
-        # Handle already existing repos gracefully
         if e.status == 422 and "name already exists" in str(e.data).lower():
-            print(f"Repo '{repo_name}' already exists. Reusing existing repository.")
-            try:
-                repo = user.get_repo(repo_name)
-            except Exception as inner_e:
-                print(f"Failed to fetch existing repo: {inner_e}")
-                return None, None, None
+            print(f"Repo '{repo_name}' already exists. Reusing it.")
+            repo = user.get_repo(repo_name)
         else:
-            print(f"Unexpected repo creation error: {e.data}")
+            print(f"Repo creation error: {e.data}")
             return None, None, None
 
-    # --- Pre-enable GitHub Pages environment before pushing workflow ---
+    # 2️⃣ Pre-enable GitHub Pages environment
     try:
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
         payload = {"source": {"branch": "main", "path": "/"}}
@@ -48,30 +42,24 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
         if r.status_code in (201, 204):
             print("✅ Pre-enabled GitHub Pages environment via API.")
         elif r.status_code == 409:
-            print("ℹ️ Pages environment already exists.")
-        elif r.status_code == 404:
-            print("⚠️ GitHub Pages API not available for this account type (expected for some user accounts).")
+            print("ℹ️ Pages already enabled.")
         else:
-            print(f"⚠️ Pages pre-enable returned {r.status_code}: {r.text}")
+            print(f"⚠️ Pages pre-enable response: {r.status_code} {r.text}")
     except Exception as e:
-        print(f"⚠️ Skipping Pages pre-enable step due to error: {e}")
+        print(f"⚠️ Skipping Pages pre-enable step: {e}")
 
-    # --- Add GitHub Actions workflow for Pages ---
+    # 3️⃣ Add workflow
     workflow_content = """name: Deploy Pages
-
 on:
   push:
     branches: [ main ]
-
 permissions:
   contents: read
   pages: write
   id-token: write
-
 concurrency:
   group: "pages"
   cancel-in-progress: true
-
 jobs:
   deploy:
     environment:
@@ -93,7 +81,7 @@ jobs:
 """
     files[".github/workflows/pages.yml"] = workflow_content
 
-    # --- Write files to a temp dir and push to GitHub ---
+    # 4️⃣ Write and push to GitHub
     try:
         with tempfile.TemporaryDirectory() as tmp:
             print(f"Preparing repo in {tmp}")
@@ -103,19 +91,10 @@ jobs:
                 with open(file_path, "w") as f:
                     f.write(content)
 
-            # Initialize git
             subprocess.run(["git", "init"], cwd=tmp, check=True)
-
-            # Configure local git identity (no --global)
-            try:
-                user_login = user.login
-                user_email = f"{user_login}@users.noreply.github.com"
-                subprocess.run(["git", "config", "user.name", user_login], cwd=tmp, check=True)
-                subprocess.run(["git", "config", "user.email", user_email], cwd=tmp, check=True)
-                print(f"Configured git identity: {user_login} <{user_email}>")
-            except Exception as git_cfg_err:
-                print(f"Warning: Git identity setup failed - {git_cfg_err}")
-
+            user_email = f"{user.login}@users.noreply.github.com"
+            subprocess.run(["git", "config", "user.name", user.login], cwd=tmp, check=True)
+            subprocess.run(["git", "config", "user.email", user_email], cwd=tmp, check=True)
             subprocess.run(["git", "branch", "-M", "main"], cwd=tmp, check=False)
             subprocess.run(["git", "add", "."], cwd=tmp, check=True)
             subprocess.run(["git", "commit", "-m", "Initial commit by automation"], cwd=tmp, check=True)
@@ -129,17 +108,23 @@ jobs:
     except subprocess.CalledProcessError as e:
         print(f"❌ Git subprocess failed: {e}")
         return None, None, None
-    except Exception as e:
-        print(f"❌ Unexpected push error: {e}")
-        return None, None, None
 
-    # --- Pages confirmation (best-effort) ---
+    # 5️⃣ Verify Pages deployment
     pages_url = f"https://{user.login}.github.io/{repo_name}/"
     print(f"📄 Expected Pages URL: {pages_url}")
+    for i in range(10):
+        try:
+            res = requests.get(pages_url, timeout=5)
+            if res.status_code == 200:
+                print(f"✅ Pages is live: {pages_url}")
+                break
+        except Exception:
+            pass
+        time.sleep(5)
+    else:
+        print("⚠️ Pages not live yet, will rely on GitHub Actions to finish build.")
 
-    print("✅ Repo successfully pushed and workflow added.")
-
-    # --- Notify evaluation server ---
+    # 6️⃣ Notify evaluation server
     if evaluation_data:
         payload = {
             "email": evaluation_data["email"],
@@ -153,11 +138,12 @@ jobs:
         for delay in [1, 2, 4, 8]:
             try:
                 res = requests.post(evaluation_data["evaluation_url"], json=payload, timeout=10)
-                print(f"Evaluation callback: {res.status_code}")
+                print(f"📤 Evaluation callback status: {res.status_code}")
                 if res.status_code == 200:
                     break
             except Exception as e:
-                print(f"Evaluation POST failed: {e}")
+                print(f"⚠️ Evaluation callback failed: {e}")
             time.sleep(delay)
 
+    print("✅ Repo successfully pushed, workflow added, and callback sent.")
     return repo.html_url if repo else "", commit_sha if repo else "", pages_url
