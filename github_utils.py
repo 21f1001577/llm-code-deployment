@@ -116,6 +116,7 @@ jobs:
     for attempt in range(3):
         time.sleep(5 * (attempt + 1))  # wait 5, then 10, then 15 seconds
         r = requests.put(pages_api, headers=headers, json=payload)
+        print(f"Pages enablement response: {r.status_code} -> {r.text[:200]}")
         if r.status_code in (201, 204):
             print("✅ GitHub Pages enabled successfully.")
             pages_enabled = True
