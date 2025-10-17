@@ -1,83 +1,67 @@
-import os, subprocess, tempfile, time, requests
-from github import Github, GithubException
+import os, requests
+from openai import OpenAI
 
 
-def create_and_push_repo(repo_name, files, evaluation_data=None):
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN not set")
+def get_llm_client():
+    base_url = os.getenv("OPENAI_BASE_URL", "https://aipipe.org/openai/v1")
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("AIPIPE_TOKEN")
+    return OpenAI(base_url=base_url, api_key=api_key)
 
-    gh = Github(token)
-    user = gh.get_user()
-    print(f"🔐 Authenticated as: {user.login}")
 
-    # Local git identity
-    user_email = f"{user.login}@users.noreply.github.com"
+def summarize_attachments(attachments):
+    return "\n".join([f"- {a.get('name')}: {a.get('url')[:40]}..." for a in attachments]) if attachments else "No attachments."
 
-    # --- Create or reuse repo ---
+
+def get_existing_html(user, repo_name):
     try:
-        repo = user.create_repo(repo_name, private=False, description="Auto-generated for IITM LLM Deployment")
-        print(f"📁 Created new repo: {repo.html_url}")
-    except GithubException as e:
-        if e.status == 422:
-            repo = user.get_repo(repo_name)
-            print(f"♻️ Repo '{repo_name}' already exists — reusing it.")
-        else:
-            raise
+        r = requests.get(f"https://raw.githubusercontent.com/{user}/{repo_name}/main/index.html", timeout=10)
+        if r.status_code == 200:
+            return r.text
+    except Exception:
+        pass
+    return ""
 
-    # --- Write workflow + files ---
-    workflow = """name: Deploy Pages
-on:
-  push:
-    branches: [ main ]
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+
+def generate_files_from_brief(brief: str, attachments=None, round_number=1, user=None, repo_name=None):
+    attachments = attachments or []
+    client = get_llm_client()
+    attachment_summary = summarize_attachments(attachments)
+
+    system_prompt = (
+        "You are an autonomous web app generator for IITM’s LLM Code Deployment platform.\n"
+        "Generate minimal HTML5+JS+CSS web apps for given briefs. Attachments are provided as data URIs.\n"
+        "Use them directly inside <script> or <img> tags as needed. Do not print markdown or code fences.\n"
+    )
+
+    existing_html = get_existing_html(user, repo_name) if round_number == 2 else ""
+    user_prompt = f"""
+Round {round_number} Brief:
+{brief}
+
+Existing HTML (if any):
+{existing_html[:2000]}
+
+Attachments:
+{attachment_summary}
+
+Return only HTML for index.html.
 """
-    files[".github/workflows/pages.yml"] = workflow
 
-    # --- Git push process ---
-    with tempfile.TemporaryDirectory() as tmp:
-        for name, content in files.items():
-            path = os.path.join(tmp, name)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(content)
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.25,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
 
-        subprocess.run(["git", "init"], cwd=tmp, check=True)
-        subprocess.run(["git", "config", "user.name", user.login], cwd=tmp)
-        subprocess.run(["git", "config", "user.email", user_email], cwd=tmp)
-        subprocess.run(["git", "add", "."], cwd=tmp)
-        subprocess.run(["git", "commit", "-m", "Automated deployment"], cwd=tmp)
-        subprocess.run(["git", "branch", "-M", "main"], cwd=tmp)
+    html = response.choices[0].message.content.strip()
+    if html.startswith("```"):
+        html = html.strip("`").replace("html", "").strip()
 
-        push_url = f"https://{token}@github.com/{user.login}/{repo_name}.git"
-        subprocess.run(["git", "remote", "add", "origin", push_url], cwd=tmp)
-        subprocess.run(["git", "push", "-u", "origin", "main", "--force"], cwd=tmp)
-
-        commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp).decode().strip()
-
-    print(f"✅ Successfully pushed to {repo.html_url}")
-    return repo.html_url, commit_sha, f"https://{user.login}.github.io/{repo_name}/"
+    return {
+        "index.html": html,
+        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nRound: {round_number}\n\nAttachments:\n{attachment_summary}",
+        "LICENSE": "MIT License\n\nCopyright (c) 2025",
+    }
