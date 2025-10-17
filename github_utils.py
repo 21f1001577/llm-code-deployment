@@ -12,8 +12,14 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
     if not token:
         raise RuntimeError("GITHUB_TOKEN not set")
 
-    user = Github(token).get_user()
-    print(f"Authenticated as: {user.login}")
+    try:
+        user_login = user.login
+        user_email = f"{user_login}@users.noreply.github.com"
+        subprocess.run(["git", "config", "--global", "user.name", user_login], check=False)
+        subprocess.run(["git", "config", "--global", "user.email", user_email], check=False)
+        print(f"Configured git identity: {user_login} <{user_email}>")
+    except Exception as git_cfg_err:
+        print(f"Warning: Failed to configure git identity - {git_cfg_err}")
 
     repo = None
     try:
