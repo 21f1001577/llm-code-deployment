@@ -9,7 +9,6 @@ from helpers import hash_secret
 from github_utils import create_and_push_repo
 from llm_utils import generate_files_from_brief
 
-
 # === CONFIG ===
 STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
@@ -26,6 +25,7 @@ except (OSError, IOError):
 
 # === APP ===
 app = FastAPI(title="IITM LLM Code Deployment API")
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -46,6 +46,7 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
 
 init_db()
 
@@ -95,7 +96,7 @@ def process_task(data: dict):
     print(f"Processing {task} (Round {round_number})")
 
     try:
-        # === ROUND 1: create new repo ===
+        # === ROUND 1 ===
         if round_number == 1:
             print(f"[Round 1] Generating initial files")
             files = generate_files_from_brief(data["brief"], data.get("attachments", []))
@@ -105,24 +106,29 @@ def process_task(data: dict):
                 repo_name,
                 files,
                 evaluation_data={
-                    "email": data["email"], "task": task, "round": 1,
-                    "nonce": nonce, "evaluation_url": data.get("evaluation_url"),
+                    "email": data["email"],
+                    "task": task,
+                    "round": 1,
+                    "nonce": nonce,
+                    "evaluation_url": data.get("evaluation_url"),
                 },
             )
 
-        # === ROUND 2: update existing repo ===
+        # === ROUND 2 ===
         elif round_number == 2:
             print(f"[Round 2] Updating existing repo: {repo_name}")
             updated_files = generate_files_from_brief(data["brief"], data.get("attachments", []))
             updated_files["LICENSE"] = get_mit_license_text()
 
-            # Push again (force overwrite)
             repo_url, commit_sha, pages_url = create_and_push_repo(
                 repo_name,
                 updated_files,
                 evaluation_data={
-                    "email": data["email"], "task": task, "round": 2,
-                    "nonce": nonce, "evaluation_url": data.get("evaluation_url"),
+                    "email": data["email"],
+                    "task": task,
+                    "round": 2,
+                    "nonce": nonce,
+                    "evaluation_url": data.get("evaluation_url"),
                 },
             )
 
@@ -130,12 +136,10 @@ def process_task(data: dict):
             print(f"Unsupported round number: {round_number}")
             return
 
+        # --- Update DB ---
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE tasks SET status=? WHERE nonce=?",
-            (f"completed: {task} round {round_number}", nonce),
-        )
+        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"completed: {task} round {round_number}", nonce))
         conn.commit()
         conn.close()
 
@@ -167,3 +171,4 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 """
+    

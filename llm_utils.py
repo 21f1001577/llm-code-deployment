@@ -15,51 +15,43 @@ def summarize_attachments(attachments):
         return "No attachments were provided."
     desc = []
     for a in attachments:
-        url = a.get("url", "")
         name = a.get("name", "unknown")
-        if "image" in url:
-            desc.append(f"- Image: {name} (display or analyze)")
-        elif "text/csv" in url:
-            desc.append(f"- CSV: {name} (data input)")
-        elif "text/markdown" in url:
-            desc.append(f"- Markdown: {name}")
-        elif "application/json" in url:
-            desc.append(f"- JSON: {name}")
+        mime = a.get("type", "unknown")
+        if "image" in mime:
+            desc.append(f"- Image file: {name}")
+        elif "csv" in mime:
+            desc.append(f"- CSV data file: {name}")
+        elif "markdown" in mime:
+            desc.append(f"- Markdown file: {name}")
         else:
-            desc.append(f"- File: {name}")
+            desc.append(f"- File: {name} ({mime})")
     return "\n".join(desc)
 
 
-def generate_files_from_brief(brief: str, attachments=None, round_number: int = 1) -> dict:
-    """
-    Generate or update app files based on IITM-style briefs.
-    Round 1 → new app
-    Round 2 → incremental improvement of previous version
-    """
+def generate_files_from_brief(brief: str, attachments=None) -> dict:
     attachments = attachments or []
     client = get_llm_client()
-    attachment_summary = summarize_attachments(attachments)
+    summary = summarize_attachments(attachments)
 
     system_prompt = f"""
-    You are an autonomous web app generator for IITM’s LLM Code Deployment system.
-    Attachment summary:
-    {attachment_summary}
-
-    Rules:
-    - Output plain HTML (no markdown, no code fences)
-    - Use Bootstrap/marked.js/highlight.js from CDNs
-    - Round 1: build new app
-    - Round 2: refine or improve an existing app, keeping functionality consistent but cleaner or more complete
-    - No comments or explanations
-    """
+You are an autonomous web app generator for IITM’s LLM Code Deployment platform.
+Read the 'brief', review attachments, and generate functional web app files.
+Rules:
+- Output plain HTML/JS/CSS only (no markdown or code fences)
+- Use Bootstrap or marked.js via CDN
+- Ensure <html>, <head>, <body> tags are valid
+- Must render directly in a browser
+"""
 
     user_prompt = f"""
-    Round: {round_number}
-    Brief:
-    {brief}
+Task Brief:
+{brief}
 
-    Generate functional static web app code as index.html.
-    """
+Attachments Summary:
+{summary}
+
+Return a single valid index.html file content only.
+"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -67,7 +59,7 @@ def generate_files_from_brief(brief: str, attachments=None, round_number: int = 
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
         ],
-        temperature=0.25,
+        temperature=0.2,
     )
 
     html_code = response.choices[0].message.content.strip()
@@ -76,5 +68,5 @@ def generate_files_from_brief(brief: str, attachments=None, round_number: int = 
 
     return {
         "index.html": html_code,
-        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nRound: {round_number}\n\nAttachments:\n{attachment_summary}",
+        "README.md": f"# Auto-generated Web App\n\n**Brief:** {brief}\n\nAttachments:\n{summary}",
     }
