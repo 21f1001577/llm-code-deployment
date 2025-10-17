@@ -1,54 +1,35 @@
 from dotenv import load_dotenv
 load_dotenv()
+
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import os
-import hashlib
-import uuid
-from helpers import hash_secret, decode_data_uri
+import sqlite3
+import requests
+from github import Github
+import subprocess
+import tempfile
+from helpers import hash_secret
 from github_utils import create_and_push_repo
 from llm_utils import generate_files_from_brief
 
 
-
-import sqlite3
-import json
-
-load_dotenv()
-
-app = FastAPI()
-
+# === CONFIG ===
 STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
+DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
 
-db_path = os.environ.get("DB_PATH", "./tasks.db")
-
-# Try to ensure DB is writable — fallback to /tmp if needed
+# Ensure DB writable
 try:
-    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-    test_file = os.path.join(os.path.dirname(db_path) or ".", ".db_write_test")
-    with open(test_file, "w") as f:
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    with open(os.path.join(os.path.dirname(DB_PATH) or ".", ".db_write_test"), "w") as f:
         f.write("")
-    os.remove(test_file)
 except (OSError, IOError):
-    # Hugging Face CPU Spaces often allow only /tmp writes
-    db_path = "/tmp/tasks.db"
+    DB_PATH = "/tmp/tasks.db"
     os.makedirs("/tmp", exist_ok=True)
 
-DB_PATH = db_path
-
-
-class TaskRequest(BaseModel):
-    email: str
-    secret: str
-    task: str
-    round: int
-    nonce: str
-    brief: str = ""
-    checks: list = []
-    evaluation_url: str = None
-    attachments: list = []
-
+# === APP ===
+app = FastAPI(title="IITM LLM Code Deployment API")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -70,101 +51,106 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
 
 
+# === SCHEMA ===
+class TaskRequest(BaseModel):
+    email: str
+    secret: str
+    task: str
+    round: int
+    nonce: str
+    brief: str = ""
+    checks: list = []
+    evaluation_url: str = None
+    attachments: list = []
+
+
+# === API ENDPOINT ===
 @app.post("/api-endpoint")
 async def receive_task(req: TaskRequest, background_tasks: BackgroundTasks):
-    # Verify secret
-    if STORED_SECRET_HASH is None:
+    if not STORED_SECRET_HASH:
         raise HTTPException(status_code=500, detail="Server secret not configured")
 
-    incoming_hash = hash_secret(req.secret)
-    if incoming_hash != STORED_SECRET_HASH:
+    if hash_secret(req.secret) != STORED_SECRET_HASH:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
-    # Store task in DB
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO tasks (email, task, round, nonce, secret_hash, brief, evaluation_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (req.email, req.task, req.round, req.nonce, incoming_hash, req.brief, req.evaluation_url, "received"),
+        (req.email, req.task, req.round, req.nonce, STORED_SECRET_HASH, req.brief, req.evaluation_url, "received"),
     )
     conn.commit()
     conn.close()
 
-    # Kick off background worker to create repo and push
     background_tasks.add_task(process_task, req.dict())
-
     return {"status": "accepted", "task": req.task, "round": req.round, "nonce": req.nonce}
 
 
+# === MAIN PROCESSOR ===
 def process_task(data: dict):
     task = data["task"]
     nonce = data["nonce"]
+    round_number = data.get("round", 1)
     short = nonce.replace("-", "")[:8]
     repo_name = f"{task}-{short}"
+    print(f"Processing {task} (Round {round_number})")
 
     try:
-        # Generate files using the LLM
-        from llm_utils import generate_files_from_brief
-        print(f"Generating files for task: {task}")
-        files = generate_files_from_brief(data["brief"])
+        # === ROUND 1: create new repo ===
+        if round_number == 1:
+            print(f"[Round 1] Generating initial files")
+            files = generate_files_from_brief(data["brief"], data.get("attachments", []))
+            files["LICENSE"] = get_mit_license_text()
 
-        # Add MIT License to ensure evaluation passes
-        files["LICENSE"] = get_mit_license_text()
+            repo_url, commit_sha, pages_url = create_and_push_repo(
+                repo_name, files,
+                evaluation_data={
+                    "email": data["email"], "task": task, "round": 1,
+                    "nonce": nonce, "evaluation_url": data["evaluation_url"],
+                },
+                update_existing=False
+            )
 
-    except Exception as e:
-        print(f"LLM generation failed: {e}")
+        # === ROUND 2: update existing repo ===
+        elif round_number == 2:
+            print(f"[Round 2] Updating existing repo: {repo_name}")
+            updated_files = generate_files_from_brief(data["brief"], data.get("attachments", []))
+            updated_files["LICENSE"] = get_mit_license_text()
+
+            repo_url, commit_sha, pages_url = create_and_push_repo(
+                repo_name, updated_files,
+                evaluation_data={
+                    "email": data["email"], "task": task, "round": 2,
+                    "nonce": nonce, "evaluation_url": data["evaluation_url"],
+                },
+                update_existing=True
+            )
+
+        else:
+            print(f"Unsupported round number: {round_number}")
+            return
+
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
             "UPDATE tasks SET status=? WHERE nonce=?",
-            (f"failed: LLM error: {e}", data["nonce"]),
+            (f"completed: {task} round {round_number}", nonce),
         )
         conn.commit()
         conn.close()
-        return
 
-    # Create and push repo
-    try:
-        repo_url, commit_sha, pages_url = create_and_push_repo(
-            repo_name,
-            files,
-            evaluation_data={
-                "email": data["email"],
-                "task": data["task"],
-                "round": data["round"],
-                "nonce": data["nonce"],
-                "evaluation_url": data["evaluation_url"],
-            },
-        )
+        print(f"✅ Task {task} (round {round_number}) completed successfully")
+
     except Exception as e:
-        print(f"Background task failed: {e}")
+        print(f"❌ Process failed for {task} (round {round_number}): {e}")
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE tasks SET status=? WHERE nonce=?",
-            (f"failed: {str(e)}", data["nonce"]),
-        )
+        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"failed: {str(e)}", nonce))
         conn.commit()
         conn.close()
-        return
-
-    # Mark success
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE tasks SET status=? WHERE nonce=?",
-        (f"completed: {repo_url}", data["nonce"]),
-    )
-    conn.commit()
-    conn.close()
-    print(f"Task {data['task']} marked as completed: {repo_url}")
-
-    # TODO: post to evaluation_url in Phase 3
-
 
 
 def get_mit_license_text():
@@ -178,4 +164,8 @@ in the Software without restriction, including without limitation the rights
 to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
-..."""
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+"""

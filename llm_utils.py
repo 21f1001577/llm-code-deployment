@@ -11,9 +11,6 @@ def get_llm_client():
 
 
 def summarize_attachments(attachments):
-    """
-    Creates a natural-language summary for the model to understand attachments.
-    """
     if not attachments:
         return "No attachments were provided."
     desc = []
@@ -21,57 +18,47 @@ def summarize_attachments(attachments):
         url = a.get("url", "")
         name = a.get("name", "unknown")
         if "image" in url:
-            desc.append(f"- Image file: {name} (type: image, to be displayed or used for demo)")
+            desc.append(f"- Image: {name} (display or analyze)")
         elif "text/csv" in url:
-            desc.append(f"- CSV file: {name} (data file to read or process)")
+            desc.append(f"- CSV: {name} (data input)")
         elif "text/markdown" in url:
-            desc.append(f"- Markdown file: {name} (text content to render)")
+            desc.append(f"- Markdown: {name}")
         elif "application/json" in url:
-            desc.append(f"- JSON file: {name} (data config or conversion rates)")
+            desc.append(f"- JSON: {name}")
         else:
-            desc.append(f"- File: {name} (type inferred from brief)")
+            desc.append(f"- File: {name}")
     return "\n".join(desc)
 
 
-def generate_files_from_brief(brief: str, attachments=None) -> dict:
+def generate_files_from_brief(brief: str, attachments=None, round_number: int = 1) -> dict:
     """
-    Generate app files dynamically based on the given brief and attachments.
-    Handles IITM-style requests with embedded data URIs.
+    Generate or update app files based on IITM-style briefs.
+    Round 1 → new app
+    Round 2 → incremental improvement of previous version
     """
     attachments = attachments or []
     client = get_llm_client()
-
     attachment_summary = summarize_attachments(attachments)
 
     system_prompt = f"""
-    You are an autonomous web app generator for IITM’s LLM Code Deployment platform.
-
-    Your task:
-    - Read the 'brief' describing what the app must do.
-    - Review the attachments (summarized below).
-    - Generate working static web app files (HTML, JS, CSS).
-
-    Attachment Summary:
+    You are an autonomous web app generator for IITM’s LLM Code Deployment system.
+    Attachment summary:
     {attachment_summary}
 
     Rules:
-    - Output must be plain text (no code fences, no markdown formatting).
-    - Write valid, minimal HTML5 with <html>, <head>, and <body>.
-    - Include external libraries (Bootstrap, marked.js, highlight.js, etc.) from CDN links only.
-    - Match element IDs and behavior exactly as described in the brief.
-    - If the brief mentions an attachment, use its data URL directly in your HTML or JavaScript.
-    - If data is to be fetched (e.g., CSV or JSON), use 'fetch()' with the data URI.
-    - If an image is attached, show it by default in an <img> element.
-    - Always produce functional code that would pass automated tests.
-    - No comments or explanations — just clean code.
+    - Output plain HTML (no markdown, no code fences)
+    - Use Bootstrap/marked.js/highlight.js from CDNs
+    - Round 1: build new app
+    - Round 2: refine or improve an existing app, keeping functionality consistent but cleaner or more complete
+    - No comments or explanations
     """
 
     user_prompt = f"""
-    Task brief:
+    Round: {round_number}
+    Brief:
     {brief}
 
-    Generate the required web application based on the above brief and attachments.
-    Return only the contents of index.html as plain text.
+    Generate functional static web app code as index.html.
     """
 
     response = client.chat.completions.create(
@@ -84,13 +71,10 @@ def generate_files_from_brief(brief: str, attachments=None) -> dict:
     )
 
     html_code = response.choices[0].message.content.strip()
-
-    # Safety cleanup for stray markdown formatting
     if html_code.startswith("```"):
         html_code = html_code.strip("`").replace("html", "", 1).strip()
 
     return {
         "index.html": html_code,
-        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nAttachments:\n{attachment_summary}\n\nGenerated automatically for IITM LLM Code Deployment.",
-        "LICENSE": "MIT License\n\nCopyright (c) 2025",
+        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nRound: {round_number}\n\nAttachments:\n{attachment_summary}",
     }
