@@ -1,0 +1,92 @@
+annotated-types==0.7.0
+    # via pydantic
+anyio==4.11.0
+    # via
+    #   httpx
+    #   openai
+    #   starlette
+certifi==2025.10.5
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+cffi==2.0.0 ; platform_python_implementation != 'PyPy'
+    # via
+    #   cryptography
+    #   pynacl
+charset-normalizer==3.4.4
+    # via requests
+click==8.3.0
+    # via uvicorn
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via
+    #   click
+    #   tqdm
+cryptography==46.0.3
+    # via pyjwt
+distro==1.9.0
+    # via openai
+fastapi==0.119.0
+    # via llm-code-deployment
+h11==0.16.0
+    # via
+    #   httpcore
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via openai
+idna==3.11
+    # via
+    #   anyio
+    #   httpx
+    #   requests
+jiter==0.11.1
+    # via openai
+openai==2.4.0
+    # via llm-code-deployment
+pycparser==2.23 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
+pydantic==2.12.2
+    # via
+    #   fastapi
+    #   llm-code-deployment
+    #   openai
+pydantic-core==2.41.4
+    # via pydantic
+pygithub==2.8.1
+    # via llm-code-deployment
+pyjwt==2.10.1
+    # via pygithub
+pynacl==1.6.0
+    # via pygithub
+python-dotenv==1.1.1
+    # via llm-code-deployment
+requests==2.32.5
+    # via
+    #   llm-code-deployment
+    #   pygithub
+sniffio==1.3.1
+    # via
+    #   anyio
+    #   openai
+starlette==0.48.0
+    # via fastapi
+tqdm==4.67.1
+    # via openai
+typing-extensions==4.15.0
+    # via
+    #   fastapi
+    #   openai
+    #   pydantic
+    #   pydantic-core
+    #   pygithub
+    #   typing-inspection
+typing-inspection==0.4.2
+    # via pydantic
+urllib3==2.5.0
+    # via
+    #   pygithub
+    #   requests
+uvicorn==0.37.0
+    # via llm-code-deployment
