@@ -8,24 +8,18 @@ from github import Github, GithubException
 
 def create_and_push_repo(repo_name, files, evaluation_data=None):
     """Create or reuse a GitHub repo, push initial files, enable Pages via Actions, and notify evaluation URL."""
+
     token = os.getenv("GITHUB_TOKEN")
-    user = Github(token).get_user()
-    print(f"Authenticated as: {user.login}")
     if not token:
         raise RuntimeError("GITHUB_TOKEN not set")
 
-    try:
-        user_login = user.login
-        user_email = f"{user_login}@users.noreply.github.com"
-        subprocess.run(["git", "config", "user.name", user_login], check=False)
-        subprocess.run(["git", "config", "user.email", user_email], check=False)
-        print(f"Configured local git identity: {user_login} <{user_email}>")
-    except Exception as git_cfg_err:
-        print(f"Warning: Failed to configure local git identity - {git_cfg_err}")
+    gh = Github(token)
+    user = gh.get_user()
+    print(f"Authenticated as: {user.login}")
 
     repo = None
     try:
-        # Try to create new repo
+        # Try to create a new repo
         repo = user.create_repo(
             repo_name,
             description="Auto-generated repo for IITM LLM Deployment",
@@ -33,7 +27,7 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
         )
         print(f"Repo created: {repo.html_url}")
     except GithubException as e:
-        # Gracefully handle repo already existing
+        # Handle "already exists"
         if e.status == 422 and "name already exists" in str(e.data).lower():
             print(f"Repo '{repo_name}' already exists. Reusing existing repository.")
             try:
@@ -45,7 +39,7 @@ def create_and_push_repo(repo_name, files, evaluation_data=None):
             print(f"Unexpected repo creation error: {e.data}")
             return None, None, None
 
-    # --- Ensure GitHub Pages workflow file always exists ---
+    # --- Add GitHub Actions workflow for Pages ---
     workflow_content = """name: Deploy Pages
 
 on:
@@ -82,25 +76,43 @@ jobs:
 """
     files[".github/workflows/pages.yml"] = workflow_content
 
-    # --- Write files to a temp directory and push to GitHub ---
+    # --- Write files to a temp dir and push to GitHub ---
     try:
         with tempfile.TemporaryDirectory() as tmp:
+            print(f"Preparing repo in {tmp}")
+            # Write all files
             for name, content in files.items():
                 file_path = os.path.join(tmp, name)
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                 with open(file_path, "w") as f:
                     f.write(content)
 
-            subprocess.check_call(["git", "init"], cwd=tmp)
-            subprocess.check_call(["git", "add", "."], cwd=tmp)
-            subprocess.check_call(["git", "commit", "-m", "Initial commit by automation"], cwd=tmp)
-            subprocess.check_call(["git", "branch", "-M", "main"], cwd=tmp)
+            # Initialize git
+            subprocess.run(["git", "init"], cwd=tmp, check=True)
+
+            # Configure git identity locally (Hugging Face disallows global config)
+            try:
+                user_login = user.login
+                user_email = f"{user_login}@users.noreply.github.com"
+                subprocess.run(["git", "config", "user.name", user_login], cwd=tmp, check=True)
+                subprocess.run(["git", "config", "user.email", user_email], cwd=tmp, check=True)
+                print(f"Configured local git identity: {user_login} <{user_email}>")
+            except Exception as git_cfg_err:
+                print(f"Warning: Failed to configure git identity - {git_cfg_err}")
+
+            # Ensure 'main' branch
+            subprocess.run(["git", "branch", "-M", "main"], cwd=tmp, check=False)
+
+            # Commit and push
+            subprocess.run(["git", "add", "."], cwd=tmp, check=True)
+            subprocess.run(["git", "commit", "-m", "Initial commit by automation"], cwd=tmp, check=True)
 
             push_url = f"https://{token}@github.com/{user.login}/{repo_name}.git"
-            subprocess.check_call(["git", "remote", "add", "origin", push_url], cwd=tmp)
-            subprocess.check_call(["git", "push", "-u", "origin", "main", "--force"], cwd=tmp)
+            subprocess.run(["git", "remote", "add", "origin", push_url], cwd=tmp, check=True)
+            subprocess.run(["git", "push", "-u", "origin", "main", "--force"], cwd=tmp, check=True)
 
             commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp).decode().strip()
+
     except subprocess.CalledProcessError as e:
         print(f"Git subprocess failed: {e}")
         return None, None, None
@@ -108,7 +120,7 @@ jobs:
         print(f"Unexpected push error: {e}")
         return None, None, None
 
-    # --- Attempt GitHub Pages API (ignore all errors, log only) ---
+    # --- Enable GitHub Pages via API (if supported) ---
     pages_url = f"https://{user.login}.github.io/{repo_name}/"
     try:
         pages_api = f"https://api.github.com/repos/{user.login}/{repo_name}/pages"
@@ -117,7 +129,7 @@ jobs:
 
         r = requests.put(pages_api, headers=headers, json=payload)
         if r.status_code == 404:
-            print("GitHub Pages API not available for user repos. Skipping automated enablement (expected).")
+            print("GitHub Pages API not available for user repos (expected for personal accounts).")
         elif r.status_code in (201, 204):
             print("GitHub Pages enabled successfully via API.")
         else:
@@ -127,7 +139,7 @@ jobs:
 
     print("Repo successfully pushed and workflow added. Marking task as completed.")
 
-    # --- Evaluation callback ---
+    # --- Send evaluation callback (non-blocking retries) ---
     if evaluation_data:
         payload = {
             "email": evaluation_data["email"],
