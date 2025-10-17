@@ -18,13 +18,13 @@ def summarize_attachments(attachments):
         url = a.get("url", "")
         name = a.get("name", "unknown")
         if "image" in url:
-            desc.append(f"- Image: {name}")
+            desc.append(f"- Image file: {name}")
         elif "csv" in url:
-            desc.append(f"- CSV data file: {name}")
+            desc.append(f"- CSV file: {name}")
         elif "markdown" in url:
-            desc.append(f"- Markdown text: {name}")
+            desc.append(f"- Markdown file: {name}")
         elif "json" in url:
-            desc.append(f"- JSON config: {name}")
+            desc.append(f"- JSON file: {name}")
         else:
             desc.append(f"- File: {name}")
     return "\n".join(desc)
@@ -38,22 +38,16 @@ def generate_files_from_brief(brief: str, attachments=None) -> dict:
     system_prompt = f"""
 You are an autonomous web app generator for IITM’s LLM Code Deployment platform.
 
-- Read the 'brief' and attachments summary.
-- Generate working static web app files (HTML, JS, CSS).
-- Use only CDN libraries (Bootstrap, highlight.js, marked.js, etc.).
-- Use provided data URIs directly where needed.
-- No markdown fences or extra text — plain code only.
+Instructions:
+- Read the brief carefully.
+- Use attachments as described.
+- Produce a single-page web app with valid HTML, JS, and CSS.
+- Use Bootstrap or CDNs as needed.
+- No markdown formatting or extra commentary.
+- Output only HTML (plain text).
 """
 
-    user_prompt = f"""
-Task Brief:
-{brief}
-
-Attachments Summary:
-{attachment_summary}
-
-Generate a complete index.html as plain HTML5 text.
-"""
+    user_prompt = f"Brief:\n{brief}\n\nAttachments:\n{attachment_summary}\n\nGenerate the HTML."
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -67,10 +61,10 @@ Generate a complete index.html as plain HTML5 text.
     html_code = response.choices[0].message.content.strip()
 
     if html_code.startswith("```"):
-        html_code = html_code.strip("`").replace("html", "", 1).strip()
+        html_code = html_code.strip("`").replace("html", "").strip()
 
     return {
         "index.html": html_code,
-        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nAttachments:\n{attachment_summary}\n\nGenerated automatically for IITM LLM Code Deployment.",
+        "README.md": f"# Auto-generated App\n\n**Brief:** {brief}\n\nAttachments:\n{attachment_summary}\n",
         "LICENSE": "MIT License\n\nCopyright (c) 2025",
     }

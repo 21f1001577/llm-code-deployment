@@ -15,7 +15,7 @@ STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
 DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
 
-# Ensure DB writable (Hugging Face-safe)
+# Ensure DB writable (safe for Hugging Face)
 try:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with open(os.path.join(os.path.dirname(DB_PATH) or ".", ".db_write_test"), "w") as f:
@@ -24,10 +24,8 @@ except (OSError, IOError):
     DB_PATH = "/tmp/tasks.db"
     os.makedirs("/tmp", exist_ok=True)
 
-
-# === APP INIT ===
+# === APP ===
 app = FastAPI(title="IITM LLM Code Deployment API")
-
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -49,7 +47,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
 
 
@@ -66,7 +63,7 @@ class TaskRequest(BaseModel):
     attachments: list = []
 
 
-# === ENDPOINT ===
+# === API ENDPOINT ===
 @app.post("/api-endpoint")
 async def receive_task(req: TaskRequest, background_tasks: BackgroundTasks):
     if not STORED_SECRET_HASH:
@@ -88,32 +85,56 @@ async def receive_task(req: TaskRequest, background_tasks: BackgroundTasks):
     return {"status": "accepted", "task": req.task, "round": req.round, "nonce": req.nonce}
 
 
-# === TASK PROCESSOR ===
+# === MAIN PROCESSOR ===
 def process_task(data: dict):
     task = data["task"]
     nonce = data["nonce"]
     round_number = data.get("round", 1)
     short = nonce.replace("-", "")[:8]
     repo_name = f"{task}-{short}"
-
     print(f"Processing {task} (Round {round_number})")
 
     try:
-        files = generate_files_from_brief(data["brief"], data.get("attachments", []))
-        files["LICENSE"] = get_mit_license_text()
+        # === ROUND 1 ===
+        if round_number == 1:
+            print(f"[Round 1] Generating initial files")
+            files = generate_files_from_brief(data["brief"], data.get("attachments", []))
+            files["LICENSE"] = get_mit_license_text()
 
-        repo_url, commit_sha, pages_url = create_and_push_repo(
-            repo_name,
-            files,
-            evaluation_data={
-                "email": data["email"],
-                "task": data["task"],
-                "round": round_number,
-                "nonce": nonce,
-                "evaluation_url": data.get("evaluation_url"),
-            },
-            update_existing=(round_number == 2),
-        )
+            repo_url, commit_sha, pages_url = create_and_push_repo(
+                repo_name,
+                files,
+                evaluation_data={
+                    "email": data["email"],
+                    "task": task,
+                    "round": 1,
+                    "nonce": nonce,
+                    "evaluation_url": data.get("evaluation_url"),
+                },
+            )
+
+        # === ROUND 2 ===
+        elif round_number == 2:
+            print(f"[Round 2] Updating existing repo: {repo_name}")
+            updated_files = generate_files_from_brief(data["brief"], data.get("attachments", []))
+            updated_files["LICENSE"] = get_mit_license_text()
+
+            repo_url, commit_sha, pages_url = create_and_push_repo(
+                repo_name,
+                updated_files,
+                evaluation_data={
+                    "email": data["email"],
+                    "task": task,
+                    "round": 2,
+                    "nonce": nonce,
+                    "evaluation_url": data.get("evaluation_url"),
+                },
+                update_existing=True,
+            )
+
+        else:
+            print(f"Unsupported round number: {round_number}")
+            return
 
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
