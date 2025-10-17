@@ -14,7 +14,7 @@ STORED_SECRET_HASH = os.environ.get("STORED_SECRET_HASH")
 OWNER_GITHUB = os.environ.get("GITHUB_USER")
 DB_PATH = os.environ.get("DB_PATH", "./tasks.db")
 
-# Ensure DB writable (Hugging Face-safe)
+# Ensure DB writable (HF-safe)
 try:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with open(os.path.join(os.path.dirname(DB_PATH) or ".", ".db_write_test"), "w") as f:
@@ -25,7 +25,6 @@ except (OSError, IOError):
 
 # === APP ===
 app = FastAPI(title="IITM LLM Code Deployment API")
-
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -46,7 +45,6 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
 
 init_db()
 
@@ -96,7 +94,6 @@ def process_task(data: dict):
     print(f"Processing {task} (Round {round_number})")
 
     try:
-        # === ROUND 1 ===
         if round_number == 1:
             print(f"[Round 1] Generating initial files")
             files = generate_files_from_brief(data["brief"], data.get("attachments", []))
@@ -114,7 +111,6 @@ def process_task(data: dict):
                 },
             )
 
-        # === ROUND 2 ===
         elif round_number == 2:
             print(f"[Round 2] Updating existing repo: {repo_name}")
             updated_files = generate_files_from_brief(data["brief"], data.get("attachments", []))
@@ -130,19 +126,21 @@ def process_task(data: dict):
                     "nonce": nonce,
                     "evaluation_url": data.get("evaluation_url"),
                 },
+                update_existing=True,
             )
 
         else:
             print(f"Unsupported round number: {round_number}")
             return
 
-        # --- Update DB ---
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute("UPDATE tasks SET status=? WHERE nonce=?", (f"completed: {task} round {round_number}", nonce))
+        cur.execute(
+            "UPDATE tasks SET status=? WHERE nonce=?",
+            (f"completed: {task} round {round_number}", nonce),
+        )
         conn.commit()
         conn.close()
-
         print(f"✅ Task {task} (round {round_number}) completed successfully")
         print(f"🔗 Pages URL: {pages_url}")
 
@@ -171,4 +169,3 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 """
-    
