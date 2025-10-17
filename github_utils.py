@@ -50,32 +50,38 @@ def create_and_push_repo(repo_name, files, evaluation_data=None, update_existing
         print(f"⚠️ Failed to pre-enable Pages: {e}")
 
     # === Verified working workflow ===
-    workflow = """name: Deploy Pages
+    workflow_content = """name: Deploy Pages
+
 on:
   push:
     branches: [ main ]
+
 permissions:
   contents: write
   pages: write
   id-token: write
   actions: write
+
 concurrency:
   group: "pages"
   cancel-in-progress: true
+
 jobs:
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
         with:
           enablement: true
+          token: ${{ secrets.GITHUB_PAT }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
@@ -85,8 +91,11 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          token: ${{ secrets.GITHUB_PAT }}
 """
-    files[".github/workflows/pages.yml"] = workflow
+
+    files[".github/workflows/pages.yml"] = workflow_content
 
     # === Write files to a temporary directory and push ===
     try:
