@@ -104,18 +104,33 @@ jobs:
         return None, None, None
 
     # --- Enable GitHub Pages ---
+        # --- Enable GitHub Pages BEFORE workflow runs ---
     pages_api = f"https://api.github.com/repos/{user.login}/{repo_name}/pages"
-    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json"
+    }
     payload = {"source": {"branch": "main", "path": "/"}}
 
-    time.sleep(5)
-    r = requests.put(pages_api, headers=headers, json=payload)
-    if r.status_code in (201, 204):
-        print("✅ GitHub Pages enabled successfully.")
-    elif r.status_code == 409:
-        print("⚠️ Pages already enabled.")
-    else:
-        print(f"⚠️ Pages API returned {r.status_code}: {r.text}")
+    pages_enabled = False
+    for attempt in range(3):
+        time.sleep(5 * (attempt + 1))  # wait 5, then 10, then 15 seconds
+        r = requests.put(pages_api, headers=headers, json=payload)
+        if r.status_code in (201, 204):
+            print("✅ GitHub Pages enabled successfully.")
+            pages_enabled = True
+            break
+        elif r.status_code == 409:
+            print("⚠️ Pages already enabled.")
+            pages_enabled = True
+            break
+        elif r.status_code == 404:
+            print(f"Attempt {attempt+1}: Pages API not ready yet (404). Retrying...")
+        else:
+            print(f"⚠️ Pages API returned {r.status_code}: {r.text}")
+
+    if not pages_enabled:
+        print("❌ Could not enable Pages after 3 attempts. The workflow may fail on first run.")
 
     pages_url = f"https://{user.login}.github.io/{repo_name}/"
 
@@ -137,3 +152,4 @@ jobs:
             print(f"⚠️ Evaluation callback failed: {e}")
 
     return repo.html_url, commit_sha, pages_url
+
